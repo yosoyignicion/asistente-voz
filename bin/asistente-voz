@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+VENV_DIR="$PROJECT_DIR/env_asistente"
+
+if [ ! -d "$VENV_DIR" ]; then
+    echo "Error: Entorno virtual no encontrado en $VENV_DIR"
+    echo "Ejecuta primero: bash $PROJECT_DIR/instalar.sh"
+    exit 1
+fi
+
+source "$VENV_DIR/bin/activate"
+
+if ! ollama list &>/dev/null; then
+    echo "→ Iniciando Ollama en segundo plano..."
+    ollama serve &>/dev/null &
+    sleep 2
+fi
+
+if ! ollama list 2>/dev/null | grep -q "asistente_voz"; then
+    echo "→ Modelo asistente_voz no encontrado. Creando..."
+    ollama create asistente_voz:latest -f "$PROJECT_DIR/Modelfile"
+fi
+
+exec python "$PROJECT_DIR/main.py" "$@"

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Círculo azul de fondo -->
+  <circle cx="128" cy="128" r="124" fill="#1E64DC" stroke="#1450C8" stroke-width="2"/>
+
+  <!-- Cabeza del micrófono -->
+  <rect x="102.4" y="34" width="51.2" height="64" rx="25.6" fill="#FFFFFF"/>
+
+  <!-- Cuello del micrófono -->
+  <rect x="117.35" y="98" width="21.3" height="42.7" fill="#FFFFFF"/>
+
+  <!-- Base del micrófono -->
+  <rect x="100.4" y="140.7" width="55.2" height="25.6" rx="4" fill="#FFFFFF"/>
+</svg>

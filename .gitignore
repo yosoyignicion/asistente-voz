@@ -1,0 +1,10 @@
+env_asistente/
+__pycache__/
+*.pyc
+piper_voices/
+archivos_historicos/
+.DS_Store
+config.json
+.vscode/
+.idea/
+*.egg-info/

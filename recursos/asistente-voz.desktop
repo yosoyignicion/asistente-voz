@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Asistente de Voz
+Comment=Asistente de voz local con IA (Ollama + Whisper + Piper)
+Exec=##PROJECT_DIR##/bin/asistente-voz
+Icon=##PROJECT_DIR##/recursos/asistente-voz.png
+Type=Application
+Categories=Utility;ArtificialIntelligence;
+Terminal=false
+StartupWMClass=ASISTENTE
