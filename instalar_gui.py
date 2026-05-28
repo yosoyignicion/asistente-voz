@@ -32,7 +32,7 @@ FROM gemma2:2b
 
 SYSTEM \"\"\"
 Eres un asistente de voz casero que habla español. Respondes siempre con una afirmacion breve y amable, nunca con preguntas. Intenta ayudar siempre, aunque no estes seguro. Solo texto plano, sin signos de interrogacion ni emojis.
-"""
+\"\"\"
 
 PARAMETER temperature 0.7
 PARAMETER num_ctx 1024
@@ -95,6 +95,35 @@ def _check_ollama() -> str | None:
             "Ollama no responde. Inícialo con 'ollama serve' en otra terminal "
             "y vuelve a ejecutar el instalador."
         )
+
+
+def _parse_modelfile_from(content: str) -> str | None:
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.upper().startswith("FROM "):
+            return stripped[5:].strip().strip('"').strip("'")
+    return None
+
+
+def _model_exists_in_ollama(name: str) -> bool:
+    result = subprocess.run(
+        ["ollama", "list"], capture_output=True, text=True, timeout=15,
+    )
+    if result.returncode != 0:
+        return False
+    for line in result.stdout.splitlines():
+        cols = line.split()
+        if cols and cols[0] == name:
+            return True
+    return False
+
+
+def _pull_ollama_model(name: str) -> bool:
+    result = subprocess.run(
+        ["ollama", "pull", name],
+        capture_output=True, text=True, timeout=600,
+    )
+    return result.returncode == 0
 
 
 def _create_model(name: str, content: str) -> bool:
@@ -800,11 +829,30 @@ class InstallerWizard:
         except Exception as e:
             self._log(f"Icono: {e}", False)
 
-        self._log(f"Creando modelo Ollama: {self.state.model_name}:latest ...")
-        ok_model = _create_model(self.state.model_name, self.state.modelfile_content)
-        self._log(f"Modelo {self.state.model_name}:latest creado", ok_model)
-        if not ok_model:
-            self.state.errors.append("No se pudo crear el modelo Ollama")
+        base_model = _parse_modelfile_from(self.state.modelfile_content)
+        base_ok = True
+        if base_model:
+            if _model_exists_in_ollama(base_model):
+                self._log(f"Modelo base {base_model} ya existe", True)
+            else:
+                self._log(f"Descargando modelo base: {base_model} ...")
+                base_ok = _pull_ollama_model(base_model)
+                self._log(f"Modelo base {base_model} descargado", base_ok)
+                if not base_ok:
+                    self.state.errors.append(f"No se pudo descargar el modelo base {base_model}")
+
+        model_full = f"{self.state.model_name}:latest"
+        if base_ok:
+            if _model_exists_in_ollama(model_full):
+                self._log(f"Modelo {model_full} ya existe, omitiendo creacion", True)
+            else:
+                self._log(f"Creando modelo Ollama: {model_full} ...")
+                ok_model = _create_model(self.state.model_name, self.state.modelfile_content)
+                self._log(f"Modelo {model_full} creado", ok_model)
+                if not ok_model:
+                    self.state.errors.append("No se pudo crear el modelo Ollama")
+        else:
+            self._log(f"Sin modelo base, omitiendo creacion de {model_full}", False)
 
         self._log(f"Descargando voz: {self.state.selected_voice} ...")
         ok_voice = _download_voice(self.state.selected_voice)
@@ -933,9 +981,25 @@ def install_headless(voice: str, model: str) -> bool:
     except Exception as e:
         print(f"  ✗ {e}")
 
-    print(f"\n[2/4] Creando modelo {model}:latest ...")
-    ok = _create_model(model, MODELFILE_TEMPLATE)
-    print(f"  {'✓' if ok else '✗'} Modelo {model}:latest")
+    print(f"\n[2/4] Preparando modelo {model}:latest ...")
+    base_model = _parse_modelfile_from(MODELFILE_TEMPLATE)
+    base_ok = True
+    if base_model:
+        if _model_exists_in_ollama(base_model):
+            print(f"  ✓ Modelo base {base_model} ya existe")
+        else:
+            print(f"  Descargando modelo base {base_model} ...")
+            base_ok = _pull_ollama_model(base_model)
+            print(f"  {'✓' if base_ok else '✗'} Modelo base {base_model}")
+
+    if base_ok:
+        if _model_exists_in_ollama(f"{model}:latest"):
+            print(f"  ✓ Modelo {model}:latest ya existe, omitiendo creacion")
+        else:
+            ok = _create_model(model, MODELFILE_TEMPLATE)
+            print(f"  {'✓' if ok else '✗'} Modelo {model}:latest")
+    else:
+        print(f"  ✗ Sin modelo base, omitiendo creacion de {model}:latest")
 
     print(f"\n[3/4] Descargando voz {voice} ...")
     ok_v = _download_voice(voice)
