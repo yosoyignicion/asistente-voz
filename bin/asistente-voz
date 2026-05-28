@@ -1,27 +1,61 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Lanzador del Asistente de Voz — tolerante a fallos, apto para autostart.
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 VENV_DIR="$PROJECT_DIR/env_asistente"
+LOG_DIR="$HOME/.cache/asistente-voz"
+
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/autostart.log"
+
+warn() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): $*" >> "$LOG_FILE"
+    if [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v notify-send &>/dev/null; then
+        notify-send "Asistente de Voz" "$*" -i dialog-warning -t 5000
+    fi
+}
 
 if [ ! -d "$VENV_DIR" ]; then
-    echo "Error: Entorno virtual no encontrado en $VENV_DIR"
-    echo "Ejecuta primero: bash $PROJECT_DIR/instalar.sh"
+    warn "Entorno virtual no encontrado en $VENV_DIR. Ejecuta: bash $PROJECT_DIR/instalar.sh"
     exit 1
 fi
 
 source "$VENV_DIR/bin/activate"
 
-if ! ollama list &>/dev/null; then
-    echo "→ Iniciando Ollama en segundo plano..."
-    ollama serve &>/dev/null &
-    sleep 2
+OLLAMA_BIN="ollama"
+if command -v ollama &>/dev/null; then
+    OLLAMA_BIN="$(command -v ollama)"
 fi
 
-if ! ollama list 2>/dev/null | grep -q "asistente_voz"; then
-    echo "→ Modelo asistente_voz no encontrado. Creando..."
-    ollama create asistente_voz:latest -f "$PROJECT_DIR/Modelfile"
+if ! "$OLLAMA_BIN" list &>/dev/null 2>&1; then
+    echo "$(date): Iniciando ollama serve" >> "$LOG_FILE"
+    "$OLLAMA_BIN" serve &>/dev/null &
+    for i in $(seq 1 20); do
+        if "$OLLAMA_BIN" list &>/dev/null 2>&1; then
+            echo "$(date): Ollama listo (${i}s)" >> "$LOG_FILE"
+            break
+        fi
+        sleep 1
+    done
+fi
+
+if ! "$OLLAMA_BIN" list &>/dev/null 2>&1; then
+    warn "Ollama no responde. Inicia 'ollama serve' manualmente."
+    exit 1
+fi
+
+MODELFILE="$PROJECT_DIR/Modelfile"
+if ! "$OLLAMA_BIN" list 2>/dev/null | grep -q "asistente_voz"; then
+    if [ -f "$MODELFILE" ]; then
+        "$OLLAMA_BIN" create asistente_voz:latest -f "$MODELFILE" 2>> "$LOG_FILE" || {
+            warn "No se pudo crear el modelo asistente_voz:latest"
+            exit 1
+        }
+    else
+        warn "Modelfile no encontrado en $PROJECT_DIR"
+        exit 1
+    fi
 fi
 
 exec python "$PROJECT_DIR/main.py" "$@"

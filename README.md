@@ -15,7 +15,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue?logo=python" alt="Python">
-  <img src="https://img.shields.io/badge/Ollama-llama3.2:3b-orange?logo=ollama" alt="Ollama">
+  <img src="https://img.shields.io/badge/Ollama-llama3.2:1b-orange?logo=ollama" alt="Ollama">
   <img src="https://img.shields.io/badge/TTS-Kokoro_82M-hotpink" alt="Kokoro">
   <img src="https://img.shields.io/badge/STT-faster--whisper_+_Silero_VAD-green" alt="STT">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="MIT">
@@ -49,9 +49,9 @@
 
 Un asistente de voz que corre **100% en local** sobre Linux. Pulsas `Ctrl+.`, hablas, y una voz natural te responde. Sin enviar tus conversaciones a ninguna nube. Sin latencia de red. Sin suscripciones.
 
-- **Motor de IA** — Ollama con `llama3.2:3b` (configurable)
+- **Motor de IA** — Ollama con `llama3.2:1b` (configurable)
 - **Reconocimiento de voz** — faster-whisper `small` + Silero VAD
-- **Síntesis de voz** — Kokoro 82M (`ef_dora`, `em_alex`, `em_santa`) + 7 voces Piper de respaldo + espeak-ng ultraligero
+- **Síntesis de voz** — Kokoro 82M (`ef_dora`, `em_alex`, `em_santa`) + 7 voces Piper de respaldo
 - **Interfaz** — Panel minimalista con customtkinter, esquinas redondeadas y animaciones sutiles
 - **Hotkey** — `Ctrl+.` para toggle de grabación (sin wake words que fallen)
 
@@ -64,16 +64,18 @@ Un asistente de voz que corre **100% en local** sobre Linux. Pulsas `Ctrl+.`, ha
 ```bash
 git clone https://github.com/yosoyignicion/asistente-voz.git
 cd Asistente-Voz
+bash scripts/preparar_entorno.sh   # opcional: prepara Ollama + modelo base
 bash instalar.sh
 ```
 
 Se abre un **wizard gráfico de 5 pasos** (customtkinter, modo oscuro) que te guía para:
 
-1. ✅ Verificar/instalar dependencias del sistema
-2. 🧠 Elegir modelo Ollama (plantilla o personalizado)
-3. 🎤 Seleccionar y **probar** tu voz TTS favorita
-4. ⚙️ Instalar, crear acceso directo y configurar auto-inicio
-5. 🎉 ¡Listo!
+1. 🧠 Elegir modelo Ollama (plantilla o personalizado)
+2. 🎤 Seleccionar y **probar** tu voz TTS favorita
+3. ⚙️ Instalar, crear acceso directo y configurar auto-inicio
+4. 🎉 ¡Listo!
+
+> El paso 0 de `instalar.sh` ofrece ejecutar `scripts/preparar_entorno.sh` para configurar Ollama automáticamente antes del wizard.
 
 ### Instalación silenciosa (terminal pura)
 
@@ -95,8 +97,11 @@ pip install -r requirements.txt
 
 # 3. Ollama
 ollama serve &>/dev/null &
-ollama pull llama3.2:3b
+ollama pull llama3.2:1b
 ollama create asistente_voz:latest -f Modelfile
+
+# Alternativa: el script de pre-vuelo automatiza estos pasos
+# bash scripts/preparar_entorno.sh
 
 # 4. ¡A volar!
 python main.py
@@ -144,14 +149,12 @@ Si tu petición lo requiere, el asistente ejecuta comandos en tu equipo:
 
 ---
 
-## 🎤 Voces disponibles (11 voces · 3 motores)
+## 🎤 Voces disponibles (10 voces · 2 motores)
 
 | Motor | Voces | Calidad | Peso |
 |-------|-------|---------|------|
 | **Kokoro 82M** | `ef_dora` ⭐, `em_alex`, `em_santa` | 🟢 Natural, expresiva | ~300 MB |
 | **Piper** | `es_ES-sharvard-medium`, `es_ES-carlfm-x_low`, `es_ES-davefx-medium`, `es_ES-mls_10246-low`, `es_MX-ald-medium`, `es_MX-claude-high`, `es_AR-daniela-high` | 🟡 Robótica, funcional | ~50 MB c/u |
-| **espeak-ng** | `espeak_es` | 🔴 Muy robótica, instantánea | ~5 MB |
-
 > ⭐ `ef_dora` es la voz por defecto. Suena natural, cálida y cercana.
 
 Cambia de voz en ⚙ → Ajustes → probar → aplicar. El cambio es inmediato.
@@ -172,14 +175,14 @@ Cualquier modelo de Ollama funciona. Probados y recomendados (~2 GB VRAM):
 
 | Modelo | Tamaño | Ideal para... |
 |--------|--------|---------------|
-| `llama3.2:3b` ⭐ | 2.0 GB | Equilibrio velocidad/calidad |
-| `llama3.2:1b` | 0.8 GB | Hardware muy limitado |
+| `llama3.2:1b` ⭐ | 0.8 GB | Máxima velocidad, 0.8 GB |
+| `llama3.2:3b` | 2.0 GB | Equilibrio velocidad/calidad |
+| `qwen2.5:1.5b` | 1.0 GB | Rápido con buen español |
 | `qwen2.5:3b` | 1.9 GB | Mejor español |
-| `qwen2.5:1.5b` | 1.0 GB | Máxima velocidad |
 | `phi3:3.8b` | 2.3 GB | Siguiendo instrucciones complejas |
 | `gemma2:2b` | 1.6 GB | Alternativa sólida de Google |
 
-> 💡 `num_ctx 4096` consume ~2.5 GB VRAM. Si tu GPU va justa, baja a `2048` en `Modelfile`.
+> 💡 `num_ctx 1024` consume ~600 MB RAM. Con llama3.2:1b (~800 MB) el total ronda 1.4 GB en CPU.
 
 ---
 
@@ -192,7 +195,7 @@ main.py                     ← Orquestador (hotkey + proc-loop)
 ├── modulos/
 │   ├── cerebro.py          ← Historial FIFO (6 interacciones)
 │   ├── stt.py              ← Grabación + Silero VAD + faster-whisper
-│   ├── tts.py              ← Kokoro | Piper | espeak-ng (auto-detecta)
+│   ├── tts.py              ← Kokoro | Piper (auto-detecta)
 │   ├── inferencia.py       ← Ollama chat con streaming
 │   ├── acciones.py         ← [ACCION:XXX] → subprocess
 │   └── vad.py              ← Silero VAD (onnxruntime, sin torch)
@@ -202,6 +205,7 @@ main.py                     ← Orquestador (hotkey + proc-loop)
 │   ├── asistente-voz.{svg,png,desktop}
 │   └── generar_icono.py
 ├── scripts/
+│   ├── preparar_entorno.sh  ← Pre-vuelo: verifica Ollama, prepara modelo
 │   ├── probar_voces.py
 │   └── desinstalar.sh
 ├── bin/asistente-voz        ← Lanzador bash (auto-arranca Ollama)
@@ -241,6 +245,7 @@ python -c "import sounddevice as sd; print(sd.query_devices())"
 ### Buenas prácticas
 
 - **System prompt sincronizado**: `Modelfile`, `modulos/cerebro.py` e `instalar_gui.py` contienen el mismo system prompt. Si editas uno, copia en los otros dos.
+- **Pre-vuelo**: Ejecuta `bash scripts/preparar_entorno.sh` antes de `instalar.sh` para preparar Ollama.
 - **Thread-safety**: Nunca llames a widgets tkinter/customtkinter desde hilos. Usa `_root_after()` o `self._panel._root.after(0, fn)`.
 - **TTS async**: Usa `reproducir_async()` o `reproducir_streaming(cola)` — nunca `reproducir()` en el hilo principal.
 - **Lock file**: `/tmp/asistente-voz.lock` previene instancias duplicadas.
@@ -271,7 +276,7 @@ python -c "import sounddevice as sd; print(sd.query_devices())"
 | No graba / error mic | Micrófono equivocado | ⚙ → Ajustes → seleccionar dispositivo → Aplicar |
 | No se escucha TTS | `portaudio19-dev` o voz no descargada | `sudo apt install portaudio19-dev` o probar voz en ⚙ |
 | Kokoro falla | `espeak-ng` no instalado o `transformers` obsoleto | `sudo apt install espeak-ng` + `pip install transformers>=5.9.0` |
-| Respuesta lenta | `num_ctx` muy alto o modelo pesado | Baja `num_ctx` a 2048 o usa `llama3.2:1b` |
+| Respuesta lenta | `num_ctx` muy alto o modelo pesado | Baja `num_ctx` a 1024 o usa `llama3.2:1b` |
 | Proceso zombie | Lock no liberado | `rm /tmp/asistente-voz.lock` |
 | Segunda instancia | Lock previene duplicados | Cierra la primera o `rm /tmp/asistente-voz.lock` |
 | Alucinaciones | VAD o ruido | Habla claro, en silencio, cerca del micro |

@@ -86,15 +86,5 @@
       "lang": "Español (Argentina)",
       "engine": "piper"
     }
-  },
-  "espeak": {
-    "es": {
-      "name": "espeak_es",
-      "description": "Voz espeak-ng, robotica pero instantanea (Espeak)",
-      "gender": "masculina",
-      "quality": "low",
-      "lang": "Español (espeak-ng)",
-      "engine": "espeak"
-    }
   }
 }

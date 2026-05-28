@@ -8,3 +8,4 @@ config.json
 .vscode/
 .idea/
 *.egg-info/
+*.tmp

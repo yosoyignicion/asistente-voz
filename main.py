@@ -5,6 +5,7 @@ Uso: python main.py [--model NAME] [--voice NAME]
 """
 
 import argparse
+import atexit
 import json
 import logging
 import os
@@ -28,8 +29,13 @@ PROJECT_DIR = Path(__file__).resolve().parent
 VOICES_JSON = PROJECT_DIR / "recursos" / "voces_disponibles.json"
 LOCK_FILE = Path("/tmp/asistente-voz.lock")
 
-with open(VOICES_JSON) as f:
-    VOICE_CATALOG = json.load(f)
+def _load_voice_catalog():
+    try:
+        with open(VOICES_JSON) as f:
+            return json.load(f)
+    except Exception:
+        logger.error("No se pudo cargar %s", VOICES_JSON)
+        return {}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,12 +73,14 @@ class AsistenteOrquestador:
     def iniciar(self) -> None:
         signal.signal(signal.SIGINT, self._manejar_signal)
         signal.signal(signal.SIGTERM, self._manejar_signal)
+        signal.signal(signal.SIGUSR1, self._mostrar_panel_signal)
 
         logger.info("Iniciando Asistente de Voz...")
         logger.info("Modelo: %s | Voz TTS: %s", self.model_name, self.voice_name)
 
         self.tts = SintetizadorVoz.obtener(self.voice_name)
-        self.tts._ensure_voice()
+        threading.Thread(target=self.tts._ensure_voice, daemon=True,
+                         name="tts-init").start()
         threading.Thread(target=self._bucle_procesamiento, daemon=True,
                          name="proc-loop").start()
         threading.Thread(target=self._iniciar_hotkeys, daemon=True,
@@ -121,6 +129,7 @@ class AsistenteOrquestador:
         self.stt._cancel.set()
         if self._panel and self._panel._root:
             self._panel._root.after(0, self._do_quit)
+            self._panel._root.after(3000, self._do_quit)
 
     def _do_quit(self) -> None:
         if self._panel:
@@ -129,13 +138,13 @@ class AsistenteOrquestador:
         os._exit(0)
 
     def _manejar_signal(self, signum, _frame) -> None:
-        logger.info("Senal %s recibida, cerrando...", signum)
         self._vivo.clear()
         self.stt._cancel.set()
-        if self._panel:
-            self._panel.cerrar()
-        _release_lock()
         os._exit(0)
+
+    def _mostrar_panel_signal(self, signum, _frame) -> None:
+        if self._panel and self._panel._root:
+            self._panel._root.after(0, self._panel.mostrar_panel)
 
     def _minimizar_panel(self) -> None:
         self._panel.ocultar()
@@ -257,7 +266,9 @@ class AsistenteOrquestador:
                     pass
             config["voice"] = name
             config["model"] = self.model_name
-            config_path.write_text(json.dumps(config, indent=2))
+            tmp = config_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(config, indent=2))
+            os.replace(tmp, config_path)
             self.voice_name = name
             self.tts = SintetizadorVoz.obtener(name)
             voice_label.config(text=f"Voz TTS: {name}")
@@ -283,9 +294,21 @@ class AsistenteOrquestador:
 
         autostart_dir = Path.home() / ".config" / "autostart"
         autostart_file = autostart_dir / "asistente-voz.desktop"
-        auto_var = tk.BooleanVar(value=autostart_file.exists())
+        config_autostart = _load_config().get("autostart", None)
+        if config_autostart is not None:
+            auto_value = config_autostart
+        else:
+            auto_value = autostart_file.exists()
+        auto_var = tk.BooleanVar(value=auto_value)
 
         def _toggle_autostart():
+            config_path = Path(__file__).resolve().parent / "config.json"
+            config = {}
+            if config_path.exists():
+                try:
+                    config = json.loads(config_path.read_text())
+                except Exception:
+                    pass
             if auto_var.get():
                 autostart_dir.mkdir(parents=True, exist_ok=True)
                 desktop_src = (Path.home() / ".local" / "share"
@@ -297,9 +320,14 @@ class AsistenteOrquestador:
                         autostart_file.symlink_to(desktop_src)
                     except OSError:
                         pass
+                config["autostart"] = True
             else:
                 if autostart_file.exists():
                     autostart_file.unlink()
+                config["autostart"] = False
+            tmp = config_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(config, indent=2))
+            os.replace(tmp, config_path)
 
         tk.Checkbutton(
             info_frame, text="Iniciar al arrancar el sistema",
@@ -377,7 +405,9 @@ class AsistenteOrquestador:
             config["device_index"] = device_idx
             config["voice"] = self.voice_name
             config["model"] = self.model_name
-            config_path.write_text(json.dumps(config, indent=2))
+            tmp = config_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(config, indent=2))
+            os.replace(tmp, config_path)
             self._device_index = device_idx
             self.stt.config.device_index = device_idx
             mic_status.config(
@@ -416,7 +446,7 @@ class AsistenteOrquestador:
     @staticmethod
     def _flat_voices() -> list[dict]:
         result: list[dict] = []
-        for _region, voces in VOICE_CATALOG.items():
+        for _region, voces in _load_voice_catalog().items():
             for v in voces.values():
                 result.append(v)
         return result
@@ -471,6 +501,7 @@ class AsistenteOrquestador:
                 self._root_after(
                     lambda: self._panel.actualizar_estado(
                         "Grabando..."))
+                self.stt._cancel.clear()
                 threading.Thread(
                     target=self._grabar_worker, daemon=True).start()
 
@@ -489,7 +520,6 @@ class AsistenteOrquestador:
             buffer.append(indata.copy()[:, 0] if indata.ndim > 1
                           else indata.copy())
 
-        self.stt._cancel.clear()
         try:
             with sd.InputStream(
                 samplerate=sr, channels=1, dtype=np.float32,
@@ -498,6 +528,10 @@ class AsistenteOrquestador:
             ):
                 while not self.stt._cancel.is_set():
                     time.sleep(0.1)
+                    max_blocks = int(self.stt.config.max_record_s * 1000 / self.stt.config.block_duration_ms)
+                    if len(buffer) >= max_blocks:
+                        self.stt._cancel.set()
+                        break
         except Exception as e:
             logger.error("Error en grabacion: %s", e)
             self._root_after(
@@ -561,7 +595,12 @@ class AsistenteOrquestador:
                 texto = self._cola_comandos.get(timeout=0.5)
             except queue.Empty:
                 continue
-            self._procesar_comando(texto)
+            try:
+                self._procesar_comando(texto)
+            except Exception as e:
+                logger.error("Error en procesamiento: %s", e, exc_info=True)
+                self._root_after(
+                    lambda: self._panel.actualizar_estado("Error de procesamiento"))
 
     def _procesar_comando(self, texto: str) -> None:
         with self._procesando:
@@ -569,12 +608,11 @@ class AsistenteOrquestador:
                 lambda: self._panel.actualizar_estado("Pensando..."))
             logger.info("Procesando: %s", texto)
 
-            self.cerebro.agregar_usuario(texto)
-
             try:
                 stream = self.inferencia.generar_stream(
                     self.cerebro.historial
                 )
+                self.cerebro.agregar_usuario(texto)
             except Exception as e:
                 logger.error("Error inferencia: %s", e)
                 respuesta = ("Lo siento, ha ocurrido un error al "
@@ -709,22 +747,26 @@ def _load_config() -> dict:
         try:
             with open(config_path) as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("No se pudo leer config.json, usando valores por defecto: %s", e)
     return {}
 
 
 def _acquire_lock() -> bool:
     if LOCK_FILE.exists():
         try:
-            old_pid = int(LOCK_FILE.read_text().strip())
+            old_pid = int(LOCK_FILE.read_text().strip().split()[0])
+            mtime = LOCK_FILE.stat().st_mtime
+            if time.time() - mtime > 3600:
+                LOCK_FILE.unlink()
+                raise ProcessLookupError()
             os.kill(old_pid, 0)
-            logger.error("Ya hay una instancia corriendo (PID %s).",
-                          old_pid)
+            os.kill(old_pid, signal.SIGUSR1)
+            logger.info("Mostrando ventana de instancia existente (PID %s).", old_pid)
             return False
         except (ValueError, ProcessLookupError, OSError):
             pass
-    LOCK_FILE.write_text(str(os.getpid()))
+    LOCK_FILE.write_text(f"{os.getpid()} {int(time.time())}")
     return True
 
 
@@ -737,9 +779,9 @@ def _release_lock() -> None:
 
 def main() -> None:
     if not _acquire_lock():
-        print("El asistente ya esta en ejecucion. "
-              "Cierralo antes de abrir otro.")
-        sys.exit(1)
+        print("Restaurando ventana del asistente...")
+        return
+    atexit.register(_release_lock)
 
     args = parse_args()
     config = _load_config()

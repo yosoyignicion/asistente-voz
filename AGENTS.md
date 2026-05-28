@@ -1,7 +1,7 @@
 # AGENTS.md — Asistente-Voz
 
 ## Stack
-Python 3.12+, venv `env_asistente/`. Ollama + `llama3.2:3b` (Modelfile). STT: `faster-whisper` (small) + Silero VAD. TTS: Kokoro 82M (primario, `ef_dora`) + Piper (fallback, 7 voces `es_*`) + espeak-ng (ultraligero, `espeak_es`). Audio: `sounddevice`. GUI: customtkinter. Hotkey: `pynput` (Ctrl+.).
+Python 3.12+, venv `env_asistente/`. Ollama + `llama3.2:1b` (Modelfile). STT: `faster-whisper` (small) + Silero VAD. TTS: Kokoro 82M (primario, `ef_dora`) + Piper (fallback, 7 voces `es_*`). Audio: `sounddevice`. GUI: customtkinter. Hotkey: `pynput` (Ctrl+.). Pre-vuelo: `scripts/preparar_entorno.sh`.
 
 ## Verificación
 No tiene linter ni type checker. Los únicos comandos de verificación:
@@ -16,7 +16,7 @@ python test/test_core.py
 ```
 
 Cada cambio debe probarse manualmente con la checklist de abajo.
-`compact.md` y `PLAN.md` contienen valores desactualizados (max_interacciones=8, voces=8, `temperature=0.75`). La fuente de verdad es el código + `Modelfile`.
+La fuente de verdad es el código + `Modelfile`.
 
 ## Checklist de pruebas manuales
 Tras cada modificación, verificar:
@@ -26,7 +26,7 @@ Tras cada modificación, verificar:
 - [ ] La respuesta se sintetiza en voz (TTS audible)
 - [ ] Las acciones `[ACCION:XXX]` se ejecutan sin congelar la GUI
 - [ ] El beep de 660Hz suena al finalizar la grabación
-- [ ] El selector de voz ⚙ muestra las 11 voces (3 Kokoro + 7 Piper + 1 Espeak) y "Probar" reproduce audio
+- [ ] El selector de voz ⚙ muestra las 10 voces (3 Kokoro + 7 Piper) y "Probar" reproduce audio
 - [ ] ✕ minimiza la ventana, no cierra la app
 - [ ] "Salir del asistente" en ⚙ cierra la app correctamente (verificar con `ps aux | grep python`)
 
@@ -36,11 +36,11 @@ Tras cada modificación, verificar:
 |--------|---------|---------|
 | `modulos/cerebro.py` | Historial FIFO (6 interacciones) | System prompt duplicado con `Modelfile` |
 | `modulos/acciones.py` | `[ACCION:XXX]` → subprocess | Si el tag va al inicio, la respuesta TTS queda vacía |
-| `modulos/stt.py` | Grabación + faster-whisper + Silero VAD | `_cancel` Event controla el flujo; `preload()` carga modelo y VAD en background; `device_index` (None = default) selecciona micrófono; `silence_threshold=0.025` y `max_record_s=15`; `_vad_trim()` aplica Silero VAD post-grabación para corte preciso; `vad_filter=False` en Whisper (audio ya recortado) |
-| `modulos/tts.py` | TTS triple: Kokoro 82M + Piper + espeak-ng | Voces Kokoro: `ef_dora`, `em_alex`, `em_santa` (24000Hz). Voces Piper: las 7 `es_*` (22050Hz). Espeak: `espeak_es` (22050Hz, subprocess). Motor auto-detectado por nombre de voz (`ef_`/`em_` → Kokoro, `es_` → Piper, `espeak_` → Espeak). Usar `reproducir_async()` para no bloquear el pipeline |
-| `modulos/inferencia.py` | Ollama chat streaming | `num_predict 150` en Modelfile limita tokens de salida |
+| `modulos/stt.py` | Grabación + faster-whisper + Silero VAD | `_cancel` Event controla el flujo; `preload()` carga modelo y VAD en background; `device_index` (None = default) selecciona micrófono; `silence_threshold=0.025` y `max_record_s=15`; `_vad_trim()` aplica Silero VAD post-grabación para corte preciso; `vad_filter=False` en Whisper (audio ya recortado). **`_record_audio()` no se usa en el pipeline principal** — `main.py` tiene su propio `_grabar_worker()` con `sd.InputStream` |
+| `modulos/tts.py` | TTS dual: Kokoro 82M + Piper | Voces Kokoro: `ef_dora`, `em_alex`, `em_santa` (24000Hz). Voces Piper: las 7 `es_*` (22050Hz). Motor auto-detectado por nombre de voz (`ef_`/`em_` → Kokoro, `es_` → Piper). Usar `reproducir_async()` para no bloquear el pipeline |
+| `modulos/inferencia.py` | Ollama chat streaming | `num_predict 80` en Modelfile limita tokens de salida |
 | `gui/panel.py` | Ventana customtkinter nativa: botón toggle "Ctrl + .", status animado, ✕ minimiza, ⚙ ajustes, icono en barra de tareas | **Nunca bloquear el hilo principal**; `set_grabando(bool)` cambia estado visual del botón |
-| `main.py` | Orquestador: 2 daemon threads (hotkey, proc), hotkey Ctrl+. vía pynput, grabación toggle, shutdown limpio | `_beep_feedback()` emite tono 660Hz al finalizar grabación; `_grabar_worker()` graba en streaming hasta siguiente toggle; `_mostrar_ajustes()` singleton (no abre múltiples ventanas); `_root_after()` envuelve tkinter para thread-safety |
+| `main.py` | Orquestador: 3 daemon threads (tts-init, hotkey, proc), hotkey Ctrl+. vía pynput, grabación toggle, shutdown limpio | TTS init en background para que la GUI aparezca instantánea; `_beep_feedback()` emite tono 660Hz al finalizar grabación; `_grabar_worker()` graba en streaming con timeout `max_record_s`; `_mostrar_ajustes()` singleton vía `after(0)` (hilo principal); `_root_after()` envuelve tkinter para thread-safety; `_manejar_signal` minimalista (solo flag + `_exit`), lock liberado por `atexit` |
 | `bin/asistente-voz` | Lanzador bash de conveniencia | Auto-arranca ollama si no está corriendo; auto-crea el modelo si falta con `ollama create asistente_voz:latest -f Modelfile`; luego ejecuta `python main.py "$@"` |
 | `instalar_gui.py` | Wizard de instalación 5 pasos con customtkinter | Sistema de pasos con indicadores ●/○; instala modelo Ollama + voz TTS + acceso directo; modo `--no-gui` disponible |
 
@@ -60,32 +60,32 @@ El system prompt está **triplicado** en tres sitios y deben ser idénticos:
 | `main.py` no arranca | Ollama no está corriendo (`ollama serve` o usa `bash bin/asistente-voz`) |
 | TTS no suena | `portaudio19-dev` no instalado o voz no descargada |
 | No reconoce voz | Micrófono mal configurado: usar ⚙ > Ajustes para seleccionar el dispositivo correcto y pulsar "Aplicar microfono". Verificar con `python -c "import sounddevice as sd; print(sd.query_devices())"` |
-| Respuestas muy lentas | `num_ctx 4096` demasiado alto; reducir en `Modelfile` |
+| Respuestas muy lentas | `num_ctx 1024` demasiado alto; reducir en `Modelfile` (valor por defecto reducido de 4096→1024 para mejor rendimiento en CPU) |
 | GUI se congela | Código bloqueante ejecutado en el callback de tkinter |
 | Modelo da error | `ollama create asistente_voz:latest -f Modelfile` no ejecutado |
 | `[ACCION:XXX]` no se ejecuta | Tag mal formado o `xdg-open`/`xset` no disponible |
 | Proceso no muere al cerrar | Hilos daemon no se limpian; `_do_quit` llama `_release_lock()` + `os._exit(0)`. Verificar con `ps aux | grep python` |
-| Icono tray no responde a clics | Falta `python3-gi gir1.2-ayatanaappindicator3-0.1`; usar ⚙ del panel |
 | Modelo desvaría o alucina | `temperature` muy alto (usar 0.5) o Modelfile editado sin recrear (`ollama create -f Modelfile`) |
 | Voz no cambia tras instalar | `config.json` no se generó; pasar `--voice` explícitamente o reinstalar |
 | Kokoro no sintetiza | `espeak-ng` no instalado (`sudo apt-get install espeak-ng`) o primera ejecución sin internet (descarga ~300MB de HuggingFace) |
 | Kokoro da error `device` o `last_hidden_state` | `transformers<4.0` instalado; necesita `transformers>=4.0`. También verifica que `torch.nn.Module.device` esté monkey-patcheado (ver `_get_kokoro_pipeline()` en `tts.py`) |
+| Piper/Kokoro no descargan voces | Primera ejecución requiere internet. Kokoro descarga ~300MB de HuggingFace. Piper descarga modelo `.onnx` por voz (~50MB c/u). Si falla, verificar `VOICE_CACHE_DIR` en `tts.py` |
 | Beep no suena al detectar wake word | `portaudio19-dev` no instalado; verificar con `python -c "import sounddevice; print(sd.query_devices())"` |
-| ⚙ no abre ajustes o crashea | `_mostrar_ajustes` espera `VOICE_CATALOG` en main.py y `recursos/voces_disponibles.json` presente |
+| VAD no encuentra modelo | `vad.py:14` contiene un path hardcodeado al equipo original (`/home/ignicion/...`). Si `recursos/silero_vad.onnx` no existe, caerá en el fallback del paquete `silero_vad/data/` |
+| ⚙ no abre ajustes o crashea | `_mostrar_ajustes` usa `_load_voice_catalog()` con fallback a `{}` (ya no crashea si falta voces_disponibles.json) |
 | Voz no persiste tras reiniciar | `config.json` no se está escribiendo (permisos); verificar con `python main.py --voice es_MX-ald-medium` |
-| Panel no responde a clic en tray | Si usas AppIndicator (Ubuntu/GNOME), el clic izq no funciona — usar menú derecho. En GTK/Cinnamon, el ítem "Mostrar / Ocultar panel" tiene `default=True` y responde al clic izq |
-| Micrófono equivocado o no graba | Seleccionar en ⚙ > Ajustes el dispositivo de entrada correcto. El índice se guarda en `config.json` como `device_index` |
 | Push-to-talk se cuelga en "Procesando audio..." | Grabación empieza al pulsar (no al soltar); si el stream no abre, verificar micrófono en ⚙ > Ajustes |
 | Respuesta alucinada o sin sentido | VAD activo en transcripción de comandos (`vad_filter=True` en `_transcribe` con `fast=True`); si persiste, verificar silencio al soltar el botón |
-| Se abre una segunda instancia | `/tmp/asistente-voz.lock` previene duplicados; si falla, eliminar el lock manualmente (`rm /tmp/asistente-voz.lock`) |
+| Se abre una segunda instancia | `/tmp/asistente-voz.lock` previene duplicados; incluye timestamp (locks >1h se invalidan automáticamente); si falla, `rm /tmp/asistente-voz.lock` |
 
 ## Threading — restricciones
 
 - Hilo principal: `customtkinter.mainloop()` (bloqueante)
-- 2 daemon threads: `hotkey`, `proc-loop`
+- 3 daemon threads: `tts-init`, `hotkey`, `proc-loop`
 - **Nunca ejecutar `tts.reproducir()` en el hilo GUI** — bloquea la interfaz
 - `_procesando` (threading.Lock) serializa el pipeline; si un comando cuelga, todo se detiene
 - `stt._cancel` Event interrumpe grabaciones; no hacer `wait()` sin timeout
-- GUI callbacks delegan trabajo a `_ejecutar_en_hilo` en `gui/panel.py:197` (nuevo daemon thread por evento)
+- `_bucle_procesamiento` protegido con try/except — el hilo proc-loop nunca muere por excepción
+- GUI callbacks delegan trabajo a `_ejecutar_en_hilo` en `gui/panel.py:205` (nuevo daemon thread por evento)
 - Las acciones del sistema ejecutan subprocess en el hilo de procesamiento, no en la GUI
 - `/tmp/asistente-voz.lock` (PID file) previene instancias duplicadas; se borra en `_do_quit` y `_manejar_signal`

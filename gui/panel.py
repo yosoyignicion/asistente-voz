@@ -75,7 +75,7 @@ class PanelFlotante:
 
     def ocultar(self) -> None:
         if self._root:
-            self._root.withdraw()
+            self._root.iconify()
 
     def mostrar_panel(self) -> None:
         if self._root:
@@ -105,13 +105,16 @@ class PanelFlotante:
 
     def _calcular_geometria(self) -> str:
         pantalla_ancho = 1920
+        pantalla_alto = 1080
         try:
             pantalla_ancho = self._root.winfo_screenwidth()
+            pantalla_alto = self._root.winfo_screenheight()
         except Exception:
             pass
         ancho, alto = 260, 130
-        x = pantalla_ancho - ancho - 30
-        return f"{ancho}x{alto}+{x}+40"
+        x = (pantalla_ancho - ancho) // 2
+        y = (pantalla_alto - alto) // 2
+        return f"{ancho}x{alto}+{x}+{y}"
 
     # ── build UI ────────────────────────────────────────────────
 
@@ -199,7 +202,8 @@ class PanelFlotante:
         self.callbacks.on_close_panel()
 
     def _on_settings(self) -> None:
-        self._ejecutar_en_hilo(self.callbacks.on_settings)
+        if self._root:
+            self._root.after(0, self.callbacks.on_settings)
 
     @staticmethod
     def _ejecutar_en_hilo(func, *args) -> None:

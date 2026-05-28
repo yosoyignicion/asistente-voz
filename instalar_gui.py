@@ -16,6 +16,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+import os
 
 PROJECT_DIR = Path(__file__).resolve().parent
 VOICES_JSON = PROJECT_DIR / "recursos" / "voces_disponibles.json"
@@ -27,15 +28,15 @@ with open(VOICES_JSON) as f:
     VOICE_CATALOG = json.load(f)
 
 MODELFILE_TEMPLATE = textwrap.dedent("""\
-FROM llama3.2:3b
+FROM llama3.2:1b
 
 SYSTEM \"\"\"
 Eres un asistente de voz local. Responde breve y directo, maximo 2 frases. Solo texto plano, sin markdown ni emojis. Si no sabes algo, dilo honestamente, no inventes. Tono agradable y cercano. Para comandos del sistema, usa [ACCION:XXX] al INICIO de tu respuesta.
 \"\"\"
 
 PARAMETER temperature 0.5
-PARAMETER num_ctx 4096
-PARAMETER num_predict 150
+PARAMETER num_ctx 1024
+PARAMETER num_predict 80
 PARAMETER repeat_penalty 1.1
 """)
 
@@ -43,7 +44,7 @@ PARAMETER repeat_penalty 1.1
 MODELFILE_EXPLICACION = textwrap.dedent("""\
 El Modelfile es un archivo de configuración de Ollama que define:
 
-  - El modelo base (ej: llama3.2:3b)
+  - El modelo base (ej: llama3.2:1b)
   - La personalidad del asistente (system prompt)
   - Los parámetros de generación (temperatura, contexto, etc.)
 
@@ -74,7 +75,7 @@ def _flat_voices() -> list[dict]:
 
 def _check_ollama() -> str | None:
     try:
-        subprocess.run(["ollama", "list"], capture_output=True, timeout=5)
+        subprocess.run(["ollama", "list"], capture_output=True, timeout=10)
         return None
     except FileNotFoundError:
         return "Ollama no está instalado. Instálalo desde: https://ollama.com/download/linux"
@@ -87,7 +88,7 @@ def _check_ollama() -> str | None:
             stderr=subprocess.DEVNULL,
         )
         time.sleep(3)
-        subprocess.run(["ollama", "list"], capture_output=True, timeout=5)
+        subprocess.run(["ollama", "list"], capture_output=True, timeout=10)
         return None
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return (
@@ -150,10 +151,16 @@ def _generate_icon() -> None:
     )
 
 
-def _save_config(voice: str, model: str) -> None:
-    config = {"voice": voice, "model": f"{model}:latest"}
+def _save_config(voice: str, model: str, autostart: bool = False) -> None:
+    config = {
+        "voice": voice,
+        "model": f"{model}:latest",
+        "autostart": autostart,
+    }
     config_path = PROJECT_DIR / "config.json"
-    config_path.write_text(json.dumps(config, indent=2))
+    tmp = config_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(config, indent=2))
+    os.replace(tmp, config_path)
 
 
 # ── GUI ────────────────────────────────────────────────────────────────────────
@@ -178,6 +185,15 @@ class InstallerWizard:
             sys.exit(1)
 
         self.state = InstallState()
+
+        config_path = PROJECT_DIR / "config.json"
+        if config_path.exists():
+            try:
+                config = json.loads(config_path.read_text())
+                self.state.auto_start = config.get("autostart", False)
+            except Exception:
+                pass
+
         self._step = 0
         self._content_frame: ctk.CTkFrame | None = None
         self._nav_frame: ctk.CTkFrame | None = None
@@ -194,6 +210,7 @@ class InstallerWizard:
         self._voz_status: ctk.CTkLabel | None = None
         self._playing_preview: bool = False
         self._stop_preview = threading.Event()
+        self._preloading: set[str] = set()
 
         self.RED = "#e94560"
 
@@ -260,34 +277,8 @@ class InstallerWizard:
         )
         self._prev_btn.pack(side=tk.LEFT, padx=(0, 8))
 
-        self._show_step_0()
-
-        self._salir_btn = tk.Button(
-            self._nav_frame, text="Cancelar", font=("Cantarell", 10),
-            bg="#16213e", fg="#e0e0e0", relief=tk.FLAT,
-            activebackground="#0f3460", activeforeground="#e0e0e0",
-            cursor="hand2", command=self._on_close,
-        )
-        self._salir_btn.pack(side=tk.LEFT)
-
-        self._next_btn = tk.Button(
-            self._nav_frame, text="Siguiente →", font=("Cantarell", 10, "bold"),
-            bg="#0f3460", fg="#ffffff", relief=tk.FLAT,
-            activebackground="#16213e", activeforeground="#ffffff",
-            cursor="hand2", command=self._next_step,
-        )
-        self._next_btn.pack(side=tk.RIGHT)
-
-        self._prev_btn = tk.Button(
-            self._nav_frame, text="← Anterior", font=("Cantarell", 10),
-            bg="#16213e", fg="#e0e0e0", relief=tk.FLAT,
-            activebackground="#0f3460", activeforeground="#e0e0e0",
-            cursor="hand2", command=self._prev_step,
-        )
-        self._prev_btn.pack(side=tk.RIGHT, padx=(0, 8))
-        self._prev_btn.pack_forget()
-
         self._render_step()
+        self._preload_voice(self.state.selected_voice)
         self._root.mainloop()
 
     def _on_close(self) -> None:
@@ -314,18 +305,18 @@ class InstallerWizard:
             self._prev_btn.pack_forget()
         else:
             self._prev_btn.pack(side=tk.RIGHT, padx=(0, 8))
-            self._prev_btn.config(state=tk.NORMAL)
+            self._prev_btn.configure(state=tk.NORMAL)
 
         if self._step == 4:
-            self._salir_btn.config(text="Cerrar")
+            self._salir_btn.configure(text="Cerrar")
             self._next_btn.pack_forget()
         else:
-            self._salir_btn.config(text="Cancelar")
+            self._salir_btn.configure(text="Cancelar")
             if self._step == 3:
                 self._next_btn.pack_forget()
             else:
                 self._next_btn.pack(side=tk.RIGHT)
-                self._next_btn.config(state=tk.NORMAL)
+                self._next_btn.configure(state=tk.NORMAL)
 
         {
             0: self._step_welcome,
@@ -417,14 +408,14 @@ class InstallerWizard:
                 font=("Cantarell", 10), bg="#1a1a2e", fg=self.RED,
                 wraplength=500, justify=tk.LEFT,
             ).pack(anchor=tk.W)
-            self._next_btn.config(state=tk.DISABLED)
+            self._next_btn.configure(state=tk.DISABLED)
         else:
             tk.Label(
                 status, text="✓ Ollama detectado y funcionando",
                 font=("Cantarell", 10), bg="#1a1a2e", fg="#2ecc71",
             ).pack(anchor=tk.W)
 
-        self._next_btn.config(text="Siguiente →")
+        self._next_btn.configure(text="Siguiente →")
 
     # ── step 1: model ────────────────────────────────────────────────────
 
@@ -474,7 +465,7 @@ class InstallerWizard:
         self._model_detail_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
         self._on_model_mode_change()
 
-        self._next_btn.config(text="Siguiente →")
+        self._next_btn.configure(text="Siguiente →")
 
     def _on_model_mode_change(self) -> None:
         for w in self._model_detail_frame.winfo_children():
@@ -656,13 +647,30 @@ class InstallerWizard:
             command=lambda: setattr(self.state, "auto_start", self._auto_var.get()),
         ).pack(anchor=tk.W, pady=(8, 0))
 
-        self._next_btn.config(text="Siguiente →")
+        self._next_btn.configure(text="Siguiente →")
 
     def _on_voice_select(self, _event) -> None:
         sel = self._voice_listbox.curselection()
         if sel:
             voice = self._voice_map[sel[0]]
             self.state.selected_voice = voice["name"]
+            self._preload_voice(voice["name"])
+
+    def _preload_voice(self, name: str) -> None:
+        if name in self._preloading:
+            return
+        self._preloading.add(name)
+        threading.Thread(target=self._preload_worker, args=(name,), daemon=True).start()
+
+    def _preload_worker(self, name: str) -> None:
+        try:
+            from modulos.tts import SintetizadorVoz
+            tts = SintetizadorVoz.obtener(name)
+            tts._ensure_voice()
+        except Exception:
+            pass
+        finally:
+            self._preloading.discard(name)
 
     def _on_probar_voz(self) -> None:
         if self._playing_preview:
@@ -686,7 +694,7 @@ class InstallerWizard:
         name = voice["name"]
         self._stop_preview.clear()
         print(f"[INSTALLER] Probando voz: {name}")
-        self._probar_btn.config(state=tk.DISABLED, text="Descargando...")
+        self._probar_btn.config(state=tk.DISABLED, text="Cargando...")
         self._voz_status.config(text=f"Preparando {name} ...")
         threading.Thread(target=self._play_voice_preview, args=(name,), daemon=True).start()
 
@@ -697,19 +705,22 @@ class InstallerWizard:
             print(f"[INSTALLER] _play_voice_preview iniciando para: {name}")
             from modulos.tts import SintetizadorVoz
             tts = SintetizadorVoz.obtener(name)
-            print(f"[INSTALLER] Descargando voz: {name}")
+            print(f"[INSTALLER] Cargando motor TTS: {name}")
+            self._root.after(0, lambda: self._voz_status.config(text="Cargando motor TTS..."))
             tts._ensure_voice()
-            print(f"[INSTALLER] Reproduciendo prueba de: {name}")
+            print(f"[INSTALLER] Sintetizando audio: {name}")
+            self._root.after(0, lambda: self._voz_status.config(text="Sintetizando audio..."))
+            audio = tts.sintetizar("Hola, soy tu asistente de voz. Estoy aqui para ayudarte con lo que necesites.")
+            if audio.size == 0:
+                self._root.after(0, lambda: self._voz_status.config(text="Error: audio vacio"))
+                return
+
+            print(f"[INSTALLER] Reproduciendo prueba: {name}")
             self._root.after(0, lambda: self._voz_status.config(text="Reproduciendo prueba..."))
             self._root.after(0, lambda: self._probar_btn.config(
                 state=tk.NORMAL, text="Detener reproduccion",
             ))
             self._playing_preview = True
-
-            audio = tts.sintetizar("Hola, soy tu asistente de voz. Estoy aqui para ayudarte con lo que necesites.")
-            if audio.size == 0:
-                self._root.after(0, lambda: self._voz_status.config(text="Error: audio vacio"))
-                return
 
             sr = tts.sample_rate
             sd.play(audio, sr)
@@ -816,9 +827,9 @@ class InstallerWizard:
             except Exception as e:
                 self._log(f"Auto-inicio: {e}", False)
 
-        self._log("Guardando configuración...")
-        _save_config(self.state.selected_voice, self.state.model_name)
-        self._log("Configuración guardada", True)
+        self._log("Guardando configuracion...")
+        _save_config(self.state.selected_voice, self.state.model_name, self.state.auto_start)
+        self._log("Configuracion guardada", True)
 
         self._root.after(0, self._install_finished)
 
@@ -957,12 +968,11 @@ def main() -> None:
                         help=f"Nombre del modelo Ollama (default: {DEFAULT_MODEL})")
     args = parser.parse_args()
 
-    error = _check_ollama()
-    if error:
-        print(f"Error: {error}")
-        sys.exit(1)
-
     if args.no_gui:
+        error = _check_ollama()
+        if error:
+            print(f"Error: {error}")
+            sys.exit(1)
         install_headless(args.voice, args.model)
     else:
         wizard = InstallerWizard()

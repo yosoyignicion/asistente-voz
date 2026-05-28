@@ -35,6 +35,19 @@ fi
 echo "============================================"
 echo ""
 
+# ── 0. Preparacion del entorno Ollama ────────────────────────────────────
+echo -e "${YELLOW}[0/3]${NC} Preparacion del entorno Ollama..."
+echo "Este paso verifica Ollama, descarga el modelo base y crea asistente_voz."
+echo "Puedes saltarlo si ya tienes todo configurado."
+read -r -p "¿Ejecutar preparador de entorno? [S/n]: " run_prep
+if [[ -z "$run_prep" || "$run_prep" =~ ^[Ss]$ ]]; then
+    if [ -f "$INSTALL_DIR/scripts/preparar_entorno.sh" ]; then
+        bash "$INSTALL_DIR/scripts/preparar_entorno.sh" || echo -e "${YELLOW}  ⚠ Preparacion cancelada o fallida.${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ scripts/preparar_entorno.sh no encontrado${NC}"
+    fi
+fi
+
 # ── 1. Dependencias del sistema ──────────────────────────────────────────
 echo -e "${YELLOW}[1/3]${NC} Dependencias del sistema..."
 
@@ -86,10 +99,18 @@ if [ -n "${MODEL_ARG:-}" ]; then
 fi
 
 # shellcheck disable=SC2086
-python "$INSTALL_DIR/instalar_gui.py" $GUI_ARGS
+if ! python "$INSTALL_DIR/instalar_gui.py" $GUI_ARGS; then
+    echo ""
+    echo -e "${RED}Error:${NC} El instalador encontro un problema."
+    echo "Verifica que Ollama este corriendo y vuelve a intentarlo."
+    echo ""
+    echo "Alternativa sin interfaz grafica:"
+    echo "  bash $INSTALL_DIR/instalar.sh --no-gui"
+    exit 1
+fi
 
-echo ""
 if $NO_GUI; then
+    echo ""
     echo "============================================"
     echo -e "${GREEN}  Instalacion completada.${NC}"
     echo "  Lanzar: bash $INSTALL_DIR/bin/asistente-voz"

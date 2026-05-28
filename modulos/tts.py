@@ -15,7 +15,7 @@ from piper.voice import PiperVoice
 VOICE_CACHE_DIR = pathlib.Path(__file__).resolve().parent.parent / "piper_voices"
 
 KOKORO_VOICES = {"ef_dora", "em_alex", "em_santa"}
-ESPEAK_VOICES = {"espeak_es"}
+ESPEAK_VOICES: set[str] = set()
 
 
 class SintetizadorVoz:
@@ -38,6 +38,7 @@ class SintetizadorVoz:
         self._voice: PiperVoice | None = None
         self._sample_rate: int = 22050
         self._ready = threading.Event()
+        self._ensure_lock = threading.Lock()
 
     @classmethod
     def obtener(cls, voice_name: str | None = None) -> "SintetizadorVoz":
@@ -63,40 +64,47 @@ class SintetizadorVoz:
     def _ensure_voice(self) -> None:
         if self._ready.is_set():
             return
-        if self._engine == "kokoro":
-            self._get_kokoro_pipeline()
-            self._sample_rate = 24000
-            self._ready.set()
-        elif self._engine == "espeak":
-            self._sample_rate = 22050
-            self._ready.set()
-        else:
-            VOICE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            model_path = VOICE_CACHE_DIR / f"{self.voice_name}.onnx"
-            config_path = VOICE_CACHE_DIR / f"{self.voice_name}.onnx.json"
-            if not model_path.exists() or not config_path.exists():
-                download_voice(self.voice_name, VOICE_CACHE_DIR)
-            with open(config_path) as f:
-                raw = json.load(f)
-            pipe_version = raw.get("piper_version")
-            if pipe_version is not None:
-                piper_config = PiperConfig.from_dict(raw)
-                self._sample_rate = piper_config.sample_rate
+        with self._ensure_lock:
+            if self._ready.is_set():
+                return
+            if self._engine == "kokoro":
+                self._get_kokoro_pipeline()
+                self._sample_rate = 24000
+                try:
+                    _ = self.sintetizar(".")
+                except Exception:
+                    pass
+                self._ready.set()
+            elif self._engine == "espeak":
+                self._sample_rate = 22050
+                self._ready.set()
             else:
-                num_symbols = len(raw.get("phoneme_id_map", {}))
-                piper_config = PiperConfig(
-                    num_symbols=max(num_symbols, 1),
-                    num_speakers=raw.get("num_speakers", 1),
-                    sample_rate=raw["audio"]["sample_rate"],
-                    espeak_voice=raw["espeak"]["voice"],
-                    phoneme_id_map=raw.get("phoneme_id_map", {}),
-                    phoneme_type=raw.get("phoneme_type", "espeak"),
-                    speaker_id_map=raw.get("speaker_id_map", {}),
-                )
-                self._sample_rate = piper_config.sample_rate
-            session = onnxruntime.InferenceSession(str(model_path))
-            self._voice = PiperVoice(session, piper_config)
-            self._ready.set()
+                VOICE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                model_path = VOICE_CACHE_DIR / f"{self.voice_name}.onnx"
+                config_path = VOICE_CACHE_DIR / f"{self.voice_name}.onnx.json"
+                if not model_path.exists() or not config_path.exists():
+                    download_voice(self.voice_name, VOICE_CACHE_DIR)
+                with open(config_path) as f:
+                    raw = json.load(f)
+                pipe_version = raw.get("piper_version")
+                if pipe_version is not None:
+                    piper_config = PiperConfig.from_dict(raw)
+                    self._sample_rate = piper_config.sample_rate
+                else:
+                    num_symbols = len(raw.get("phoneme_id_map", {}))
+                    piper_config = PiperConfig(
+                        num_symbols=max(num_symbols, 1),
+                        num_speakers=raw.get("num_speakers", 1),
+                        sample_rate=raw["audio"]["sample_rate"],
+                        espeak_voice=raw["espeak"]["voice"],
+                        phoneme_id_map=raw.get("phoneme_id_map", {}),
+                        phoneme_type=raw.get("phoneme_type", "espeak"),
+                        speaker_id_map=raw.get("speaker_id_map", {}),
+                    )
+                    self._sample_rate = piper_config.sample_rate
+                session = onnxruntime.InferenceSession(str(model_path))
+                self._voice = PiperVoice(session, piper_config)
+                self._ready.set()
 
     def sintetizar(self, texto: str) -> np.ndarray:
         """Convierte texto a array de audio float32. Bloquea hasta terminar."""
