@@ -62,7 +62,7 @@ Un asistente de voz que corre **100% en local** sobre Linux. Pulsas `Ctrl+.`, ha
 ### Método rápido (recomendado)
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/yosoyignicion/asistente-voz.git
 cd Asistente-Voz
 bash instalar.sh
 ```
