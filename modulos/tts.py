@@ -57,8 +57,18 @@ class SintetizadorVoz:
                 if not hasattr(_torch.nn.Module, "device"):
                     _torch.nn.Module.device = property(
                         lambda self: next(self.parameters()).device)
-                from kokoro import KPipeline
-                cls._kokoro_pipeline = KPipeline(lang_code="e", device="cpu")
+                for intento in range(3):
+                    try:
+                        from kokoro import KPipeline
+                        cls._kokoro_pipeline = KPipeline(
+                            lang_code="e", device="cpu")
+                        break
+                    except ImportError:
+                        if intento < 2:
+                            import time
+                            time.sleep(0.5)
+                        else:
+                            raise
         return cls._kokoro_pipeline
 
     def _ensure_voice(self) -> None:

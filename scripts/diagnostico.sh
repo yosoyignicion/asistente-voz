@@ -2,7 +2,7 @@
 # Diagnostico rapido del Asistente de Voz — verifica GPU, Ollama, audio, modelos.
 # Uso: bash scripts/diagnostico.sh
 
-set -euo pipefail
+set -eu
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -12,9 +12,12 @@ NC='\033[0m'
 pass=0
 fail=0
 
-ok()  { echo -e "  ${GREEN}OK${NC}   $*"; ((pass++)); }
-warn(){ echo -e "  ${YELLOW}WARN${NC} $*"; ((fail++)); }
-err() { echo -e "  ${RED}FAIL${NC} $*"; ((fail++)); }
+ok()  { echo -e "  ${GREEN}OK${NC}   $*"; pass=$((pass + 1)); }
+warn(){ echo -e "  ${YELLOW}WARN${NC} $*"; fail=$((fail + 1)); }
+err() { echo -e "  ${RED}FAIL${NC} $*"; fail=$((fail + 1)); }
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 echo "============================================"
 echo "  Diagnostico — Asistente de Voz"
@@ -25,7 +28,7 @@ echo ""
 echo -e "${YELLOW}[GPU]${NC}"
 
 if command -v vulkaninfo &>/dev/null; then
-    gpu_name=$(vulkaninfo --summary 2>/dev/null | grep deviceName | head -1 | cut -d= -f2 | xargs)
+    gpu_name=$(vulkaninfo --summary 2>/dev/null | { grep deviceName || true; } | head -1 | cut -d= -f2 | xargs)
     if [ -n "${gpu_name:-}" ]; then
         ok "GPU: $gpu_name"
     else
@@ -36,9 +39,9 @@ else
 fi
 
 if command -v glxinfo &>/dev/null; then
-    vram=$(glxinfo -B 2>/dev/null | grep "Video memory" | awk '{print $4}' | head -1)
+    vram=$(glxinfo -B 2>/dev/null | { grep "Video memory" || true; } | awk '{print $3}' | head -1)
     if [ -n "${vram:-}" ]; then
-        ok "VRAM: ${vram} MB"
+        ok "VRAM: ${vram}"
     else
         warn "No se pudo detectar VRAM"
     fi
@@ -53,26 +56,29 @@ echo -e "${YELLOW}[Ollama]${NC}"
 if ! command -v ollama &>/dev/null; then
     err "Ollama no instalado. Descarga: https://ollama.com/download/linux"
 else
-    ok "Ollama instalado ($(ollama --version 2>/dev/null || echo '?'))"
+    ollama_ver=$(timeout 5 ollama --version 2>/dev/null || echo "?")
+    ok "Ollama instalado ($ollama_ver)"
 
-    if ! ollama list &>/dev/null 2>&1; then
+    if [ -n "${OLLAMA_VULKAN:-}" ]; then
+        ok "OLLAMA_VULKAN=${OLLAMA_VULKAN} (entorno)"
+    fi
+
+    if ! timeout 10 ollama list &>/dev/null 2>&1; then
         warn "Servidor Ollama no responde. Inicia con: OLLAMA_VULKAN=1 ollama serve"
     else
         ok "Servidor Ollama corriendo"
 
-        # Modelo asistente_voz
-        if ollama list 2>/dev/null | grep -q "asistente_voz"; then
+        if timeout 10 ollama list 2>/dev/null | { grep -q "asistente_voz" || true; }; then
             ok "Modelo asistente_voz:latest presente"
         else
             warn "Modelo asistente_voz:latest no encontrado. Crear: ollama create asistente_voz:latest -f Modelfile"
         fi
 
-        # Backend GPU
-        gpu_line=$(ollama ps 2>/dev/null | grep -i "gpu\|vulkan" || true)
+        gpu_line=$(timeout 10 ollama ps 2>/dev/null | { grep -i "gpu\|vulkan" || true; })
         if [ -n "$gpu_line" ]; then
             ok "Backend GPU activo (Vulkan/CUDA)"
         else
-            running_models=$(ollama ps 2>/dev/null | wc -l)
+            running_models=$(timeout 10 ollama ps 2>/dev/null | wc -l || echo 0)
             if [ "$running_models" -gt 1 ]; then
                 warn "Backend GPU NO detectado. Ejecuta: OLLAMA_VULKAN=1 ollama serve"
             fi
@@ -84,29 +90,48 @@ fi
 echo ""
 echo -e "${YELLOW}[Audio]${NC}"
 
-if command -v python3 &>/dev/null; then
-    SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+py_exit=1
+audio_info=""
 
-    audio_info=$(python3 -c "
+_python_bin="python3"
+if [ -x "$PROJECT_DIR/env_asistente/bin/python" ]; then
+    _python_bin="$PROJECT_DIR/env_asistente/bin/python"
+fi
+
+if command -v "$_python_bin" &>/dev/null; then
+    set +e
+    audio_info=$("$_python_bin" << 'PYEOF' 2>/dev/null
 import sounddevice as sd
 devs = sd.query_devices()
-in_count = sum(1 for d in devs if d['max_input_channels'] > 0)
-out_count = sum(1 for d in devs if d['max_output_channels'] > 0)
-default_in = sd.query_devices(kind='input')
-default_out = sd.query_devices(kind='output')
-print(f'{len(devs)}:{in_count}:{out_count}:{default_in[\"name\"]}:{default_out[\"name\"]}')
-" 2>/dev/null)
-    if [ $? -eq 0 ] && [ -n "${audio_info:-}" ]; then
-        IFS=':' read -r total in_count out_count def_in def_out <<< "$audio_info"
-        ok "Dispositivos: ${total} total (${in_count} entrada, ${out_count} salida)"
-        ok "Micro: $def_in"
-        ok "Altavoces: $def_out"
-    else
-        warn "sounddevice no disponible o sin dispositivos. Instala: pip install sounddevice"
-    fi
+in_count = sum(1 for d in devs if d["max_input_channels"] > 0)
+out_count = sum(1 for d in devs if d["max_output_channels"] > 0)
+default_in = sd.query_devices(kind="input")
+default_out = sd.query_devices(kind="output")
+print(f"{len(devs)}:{in_count}:{out_count}:{default_in['name']}:{default_out['name']}")
+PYEOF
+)
+    py_exit=$?
+    set -e
+fi
+
+if [ $py_exit -eq 0 ] && [ -n "${audio_info:-}" ]; then
+    IFS=':' read -r total in_count out_count def_in def_out <<< "$audio_info" || true
+    ok "Dispositivos: ${total} total (${in_count} entrada, ${out_count} salida)"
+    ok "Micro: $def_in"
+    ok "Altavoces: $def_out"
 else
-    warn "Python3 no encontrado"
+    warn "sounddevice no disponible o sin dispositivos. Instala: pip install sounddevice"
+fi
+
+# ── Disco ──────────────────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[Disco]${NC}"
+
+if command -v df &>/dev/null; then
+    espacio=$(df -h "$PROJECT_DIR" 2>/dev/null | tail -1 | awk '{print $4}')
+    if [ -n "${espacio:-}" ]; then
+        ok "Espacio libre en disco: $espacio"
+    fi
 fi
 
 # ── Archivos clave ─────────────────────────────────────────────────
@@ -143,5 +168,13 @@ elif [ "$fail" -le 3 ]; then
     echo -e "  ${YELLOW}Algunos avisos. Revisa los WARN arriba.${NC}"
 else
     echo -e "  ${RED}Varios problemas. Revisa los FAIL arriba.${NC}"
+fi
+
+echo ""
+echo "  Proyecto: $PROJECT_DIR"
+if command -v git &>/dev/null && git -C "$PROJECT_DIR" rev-parse --git-dir &>/dev/null 2>&1; then
+    commit=$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo "?")
+    rama=$(git -C "$PROJECT_DIR" branch --show-current 2>/dev/null || echo "?")
+    echo "  Git: $rama @ $commit"
 fi
 echo "────────────────────────────────────────"

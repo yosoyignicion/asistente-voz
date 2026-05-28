@@ -94,16 +94,58 @@ class AsistenteOrquestador:
     def _verificar_gpu(self) -> None:
         try:
             import subprocess
+
+            if os.environ.get("OLLAMA_VULKAN"):
+                logger.info("GPU configurada via OLLAMA_VULKAN=%s ✓",
+                            os.environ["OLLAMA_VULKAN"])
+                return
+
             result = subprocess.run(
-                ["ollama", "ps"], capture_output=True, text=True, timeout=10,
+                ["ollama", "ps"], capture_output=True, text=True, timeout=5,
             )
-            if "gpu" in result.stdout.lower() or "vulkan" in result.stdout.lower():
-                logger.info("GPU detectada en Ollama ✓")
-            else:
-                logger.warning(
-                    "GPU no detectada en Ollama. Respuestas ~5x mas lentas. "
-                    "Para activar GPU: OLLAMA_VULKAN=1 ollama serve"
+            if result.returncode != 0:
+                return
+
+            has_gpu_hw = False
+            try:
+                vk = subprocess.run(
+                    ["vulkaninfo", "--summary"], capture_output=True,
+                    text=True, timeout=5,
                 )
+                has_gpu_hw = "deviceName" in vk.stdout
+            except Exception:
+                pass
+
+            if not has_gpu_hw:
+                logger.info("Sin GPU detectada en el sistema. Usando CPU.")
+                return
+
+            ollama_gpu = False
+            try:
+                pgrep = subprocess.run(
+                    ["pgrep", "-x", "ollama"], capture_output=True,
+                    text=True, timeout=3,
+                )
+                for pid in pgrep.stdout.strip().split():
+                    try:
+                        env_data = Path(f"/proc/{pid}/environ").read_text()
+                        if "OLLAMA_VULKAN" in env_data:
+                            ollama_gpu = True
+                            break
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            if ollama_gpu:
+                logger.info("GPU detectada en Ollama (servidor con Vulkan) ✓")
+                return
+
+            logger.warning(
+                "GPU detectada en sistema pero Ollama sin Vulkan. "
+                "Respuestas ~5x mas lentas. "
+                "Para activar: OLLAMA_VULKAN=1 ollama serve"
+            )
         except Exception:
             pass
 
@@ -778,6 +820,8 @@ def parse_args() -> argparse.Namespace:
                         help="Modelo Ollama (default: asistente_voz:latest)")
     parser.add_argument("--voice", default=None,
                         help="Voz TTS (default: ef_dora)")
+    parser.add_argument("--diagnose", action="store_true",
+                        help="Ejecuta diagnostico del sistema y sale")
     return parser.parse_args()
 
 
@@ -824,6 +868,14 @@ def main() -> None:
     atexit.register(_release_lock)
 
     args = parse_args()
+
+    if args.diagnose:
+        import subprocess as _sp
+        diag_script = PROJECT_DIR / "scripts" / "diagnostico.sh"
+        _sp.run(["bash", str(diag_script)])
+        _release_lock()
+        return
+
     config = _load_config()
 
     model = args.model or config.get("model") or "asistente_voz:latest"
