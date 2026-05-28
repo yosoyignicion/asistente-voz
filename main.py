@@ -23,7 +23,6 @@ from modulos.cerebro import Cerebro
 from modulos.inferencia import MotorInferencia
 from modulos.stt import SpeechToText, STTConfig
 from modulos.tts import SintetizadorVoz
-from modulos.acciones import extraer_accion, ejecutar_accion
 
 PROJECT_DIR = Path(__file__).resolve().parent
 VOICES_JSON = PROJECT_DIR / "recursos" / "voces_disponibles.json"
@@ -85,8 +84,28 @@ class AsistenteOrquestador:
                          name="proc-loop").start()
         threading.Thread(target=self._iniciar_hotkeys, daemon=True,
                          name="hotkey").start()
+        threading.Thread(target=self._verificar_gpu, daemon=True,
+                         name="gpu-check").start()
 
         self._iniciar_gui()
+
+    # ── GPU check ───────────────────────────────────────────────
+
+    def _verificar_gpu(self) -> None:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["ollama", "ps"], capture_output=True, text=True, timeout=10,
+            )
+            if "gpu" in result.stdout.lower() or "vulkan" in result.stdout.lower():
+                logger.info("GPU detectada en Ollama ✓")
+            else:
+                logger.warning(
+                    "GPU no detectada en Ollama. Respuestas ~5x mas lentas. "
+                    "Para activar GPU: OLLAMA_VULKAN=1 ollama serve"
+                )
+        except Exception:
+            pass
 
     # ── Hotkey ──────────────────────────────────────────────────
 
@@ -562,9 +581,11 @@ class AsistenteOrquestador:
         self._root_after(
             lambda: self._panel.actualizar_estado(
                 "Procesando audio..."))
+        t0_stt = time.perf_counter()
         texto = self.stt.transcribe_audio(audio)
+        t_stt = time.perf_counter() - t0_stt
         if texto:
-            logger.info("Comando: %s", texto)
+            logger.info("Comando: %s (STT: %.3fs)", texto, t_stt)
             self._cola_comandos.put(texto)
         else:
             self._root_after(
@@ -573,7 +594,7 @@ class AsistenteOrquestador:
 
     def _beep_feedback(self) -> None:
         try:
-            sr = 22050
+            sr = 24000
             duration = 0.1
             freq = 660
             t = np.linspace(0, duration, int(sr * duration),
@@ -606,6 +627,7 @@ class AsistenteOrquestador:
         with self._procesando:
             self._root_after(
                 lambda: self._panel.actualizar_estado("Pensando..."))
+            t0_inferencia = time.perf_counter()
             logger.info("Procesando: %s", texto)
 
             try:
@@ -631,27 +653,24 @@ class AsistenteOrquestador:
             buf = ""
             frase_buffer = ""
             cola_tts = None
-            modo_sincrono = False
+            tts_spawned = False
+            t0_tts = None
+            primer_token_recibido = None
 
             for fragmento in stream:
                 buf += fragmento
 
+                if primer_token_recibido is None and buf.strip():
+                    primer_token_recibido = time.perf_counter()
+                    ttfb = primer_token_recibido - t0_inferencia
+                    logger.info("TTFB: %.3fs", ttfb)
+
                 if cola_tts is None:
                     stripped = buf.lstrip()
-                    if (stripped.startswith("[ACCION:")
-                            and ("] " in stripped
-                                 or stripped.endswith("]"))):
-                        modo_sincrono = True
+                    if stripped:
                         cola_tts = queue.Queue()
-                    elif stripped and not stripped.startswith(
-                            "[ACCION:"):
-                        cola_tts = queue.Queue()
-                        threading.Thread(
-                            target=self.tts.reproducir_streaming,
-                            args=(cola_tts,), daemon=True,
-                        ).start()
 
-                if cola_tts is not None and not modo_sincrono:
+                if cola_tts is not None:
                     frase_buffer += fragmento
                     while True:
                         found = False
@@ -662,69 +681,90 @@ class AsistenteOrquestador:
                                     :idx + 1].strip()
                                 frase_buffer = frase_buffer[
                                     idx + 1:]
-                                acc = extraer_accion(frase)
-                                if acc:
-                                    _ = ejecutar_accion(acc)
-                                    frase = frase.split(
-                                        "]", 1)[-1].strip()
                                 if frase:
-                                    cola_tts.put(frase)
+                                    if not tts_spawned:
+                                        t0_tts = time.perf_counter()
+                                        primer_audio = self.tts.sintetizar(frase)
+                                        t1_tts = time.perf_counter()
+                                        logger.info("TTS 1a frase sintetizada: %.3fs", t1_tts - t0_tts)
+                                        threading.Thread(
+                                            target=self.tts.reproducir_streaming,
+                                            args=(cola_tts, primer_audio),
+                                            daemon=True,
+                                        ).start()
+                                        tts_spawned = True
+                                    else:
+                                        cola_tts.put(frase)
                                 found = True
                                 break
                         if not found:
                             break
+                    if not tts_spawned and len(frase_buffer) > 80:
+                        chunk = frase_buffer.strip()
+                        if chunk:
+                            t0_tts = time.perf_counter()
+                            primer_audio = self.tts.sintetizar(chunk)
+                            t1_tts = time.perf_counter()
+                            logger.info("TTS chunk largo sintetizado: %.3fs (len=%d)", t1_tts - t0_tts, len(chunk))
+                            threading.Thread(
+                                target=self.tts.reproducir_streaming,
+                                args=(cola_tts, primer_audio),
+                                daemon=True,
+                            ).start()
+                            tts_spawned = True
+                            frase_buffer = ""
 
+            t_inferencia_total = time.perf_counter() - t0_inferencia
             respuesta = buf.strip()
+            logger.info("Respuesta: %s", respuesta)
+            logger.info("Pipeline → Inferencia: %.3fs | TTFB: %.3fs | %d tokens",
+                        t_inferencia_total,
+                        (primer_token_recibido - t0_inferencia) if primer_token_recibido else 0,
+                        len(respuesta.split()))
+
             if not respuesta:
-                if cola_tts is not None and not modo_sincrono:
+                if cola_tts is not None:
                     cola_tts.put(None)
-                return
-
-            if modo_sincrono:
-                accion = extraer_accion(respuesta)
-                if accion:
-                    logger.info("Accion detectada: %s",
-                                accion.tag.value)
-                    self._root_after(
-                        lambda a=accion.tag.value: (
-                            self._panel.actualizar_estado(
-                                f"Ejecutando: {a}")))
-                    resultado = ejecutar_accion(accion)
-                    respuesta_limpia = (
-                        respuesta.split("]", 1)[-1].strip()
-                        if "]" in respuesta else ""
-                    )
-                    texto_tts = (
-                        resultado if not respuesta_limpia
-                        else respuesta_limpia
-                    )
-                else:
-                    texto_tts = respuesta
-
-                self.cerebro.agregar_asistente(respuesta)
-
-                if texto_tts:
-                    self._root_after(
-                        lambda: self._panel.actualizar_estado(
-                            "Hablando..."))
-                    try:
-                        self.tts.reproducir_async(texto_tts)
-                    except Exception as e:
-                        logger.error("Error TTS: %s", e)
-            else:
-                self.cerebro.agregar_asistente(respuesta)
-                if frase_buffer.strip():
-                    acc = extraer_accion(frase_buffer)
-                    if acc:
-                        _ = ejecutar_accion(acc)
-                        frase_buffer = frase_buffer.split(
-                            "]", 1)[-1].strip()
-                    if frase_buffer.strip():
-                        cola_tts.put(frase_buffer.strip())
-                cola_tts.put(None)
                 self._root_after(
                     lambda: self._panel.actualizar_estado(
-                        "Hablando..."))
+                        "Esperando..."))
+                return
+
+            self.cerebro.agregar_asistente(respuesta)
+
+            if not tts_spawned:
+                if frase_buffer.strip():
+                    t0_tts = time.perf_counter()
+                    primer_audio = self.tts.sintetizar(
+                        frase_buffer.strip())
+                    t1_tts = time.perf_counter()
+                    logger.info("TTS frase final sintetizada: %.3fs", t1_tts - t0_tts)
+                    threading.Thread(
+                        target=self.tts.reproducir_streaming,
+                        args=(cola_tts, primer_audio),
+                        daemon=True,
+                    ).start()
+                    tts_spawned = True
+                elif respuesta:
+                    t0_tts = time.perf_counter()
+                    primer_audio = self.tts.sintetizar(respuesta)
+                    t1_tts = time.perf_counter()
+                    logger.info("TTS unica frase sintetizada: %.3fs", t1_tts - t0_tts)
+                    threading.Thread(
+                        target=self.tts.reproducir_streaming,
+                        args=(cola_tts, primer_audio),
+                        daemon=True,
+                    ).start()
+                    tts_spawned = True
+            elif frase_buffer.strip():
+                cola_tts.put(frase_buffer.strip())
+
+            if tts_spawned:
+                cola_tts.put(None)
+
+            self._root_after(
+                lambda: self._panel.actualizar_estado(
+                    "Hablando..."))
 
             self._root_after(
                 lambda: self._panel.actualizar_estado(

@@ -11,7 +11,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from modulos.cerebro import Cerebro, SYSTEM_PROMPT
-from modulos.acciones import AccionTag, extraer_accion
 from modulos.stt import STTConfig
 
 passed = 0
@@ -85,58 +84,6 @@ def test_cerebro_historial_es_copia() -> None:
     c.agregar_usuario("test")
     h2 = c.historial
     tassert(len(h1) == 1, "historial devuelto es copia, no referencia viva")
-
-
-# ── Acciones ───────────────────────────────────────────────────────────
-
-def test_extraer_accion_navegador() -> None:
-    accion = extraer_accion("Aquí tienes [ACCION:ABRIR_NAVEGADOR] la web")
-    tassert(accion is not None, "detecta tag ABRIR_NAVEGADOR")
-    tassert(accion.tag == AccionTag.ABRIR_NAVEGADOR, "tag correcto")
-
-
-def test_extraer_accion_terminal() -> None:
-    accion = extraer_accion("[ACCION:ABRIR_TERMINAL]")
-    tassert(accion is not None, "detecta tag ABRIR_TERMINAL")
-    tassert(accion.tag == AccionTag.ABRIR_TERMINAL, "tag correcto")
-
-
-def test_extraer_accion_al_inicio() -> None:
-    accion = extraer_accion("[ACCION:ABRIR_CODE] abre VS Code")
-    tassert(accion is not None, "detecta tag al inicio del texto")
-    tassert(accion.tag == AccionTag.ABRIR_CODE, "tag CODE correcto")
-
-
-def test_extraer_accion_apagar() -> None:
-    accion = extraer_accion("voy a [ACCION:APAGAR_PANTALLA] ahora mismo")
-    tassert(accion is not None, "detecta tag APAGAR_PANTALLA")
-
-
-def test_extraer_accion_busqueda() -> None:
-    accion = extraer_accion("busca [ACCION:ABRIR_BUSQUEDA] perros golden retriever en google")
-    tassert(accion is not None, "detecta tag ABRIR_BUSQUEDA")
-    tassert(accion.argumento == "perros golden retriever en google", "extrae argumento")
-
-
-def test_extraer_accion_case_insensitive() -> None:
-    accion = extraer_accion("[ACCION:abrir_navegador]")
-    tassert(accion is not None, "tag en minúsculas funciona")
-    tassert(accion.tag == AccionTag.ABRIR_NAVEGADOR, "normaliza a enum")
-
-
-def test_extraer_accion_inexistente() -> None:
-    accion = extraer_accion("[ACCION:VOLAR_COMETA] esto no existe")
-    tassert(accion is None, "tag inventado devuelve None")
-
-
-def test_extraer_accion_sin_tag() -> None:
-    accion = extraer_accion("una respuesta normal sin acciones")
-    tassert(accion is None, "texto sin tag devuelve None")
-
-
-def test_extraer_accion_sin_cierre() -> None:
-    accion = extraer_accion("[ACCION:ABRIR_NAVEGADOR sin cerrar corchete")
-    tassert(accion is None, "tag sin ] devuelve None")
 
 
 # ── STTConfig defaults ─────────────────────────────────────────────────

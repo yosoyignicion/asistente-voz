@@ -1,7 +1,9 @@
 """Silero VAD — Voice Activity Detection via ONNX (sin torch)."""
 
+import importlib.util
 import logging
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -9,11 +11,15 @@ import onnxruntime as ort
 
 logger = logging.getLogger(__name__)
 
+_SPEC = importlib.util.find_spec("silero_vad")
+if _SPEC and _SPEC.origin and not _SPEC.origin.endswith("__init__.py"):
+    _SITE_PKGS_FALLBACK = Path(_SPEC.origin).parent / "data" / "silero_vad.onnx"
+else:
+    _SITE_PKGS_FALLBACK = None
+
 _ONNX_PATHS = [
     (Path(__file__).resolve().parent.parent / "recursos" / "silero_vad.onnx"),
-    Path("/home/ignicion/Docs-Personal/llama3.2-3b/Asistente-Voz/env_asistente/"
-         "lib/python3.12/site-packages/silero_vad/data/silero_vad.onnx"),
-]
+] + ([_SITE_PKGS_FALLBACK] if _SITE_PKGS_FALLBACK else [])
 
 
 def _find_model() -> str:

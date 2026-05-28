@@ -36,7 +36,7 @@ class SpeechToText:
             if self._model is None:
                 from faster_whisper import WhisperModel
                 self._model = WhisperModel(
-                    "small", device="cpu", compute_type="int8"
+                    "base", device="cpu", compute_type="int8"
                 )
 
     def _load_vad(self) -> SileroVAD:

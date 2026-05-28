@@ -3,6 +3,10 @@ __pycache__/
 *.pyc
 piper_voices/
 archivos_historicos/
+modelos/
+*.wav
+*.mp3
+*.m4a
 .DS_Store
 config.json
 .vscode/

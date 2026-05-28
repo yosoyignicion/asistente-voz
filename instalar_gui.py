@@ -28,13 +28,13 @@ with open(VOICES_JSON) as f:
     VOICE_CATALOG = json.load(f)
 
 MODELFILE_TEMPLATE = textwrap.dedent("""\
-FROM llama3.2:1b
+FROM gemma2:2b
 
 SYSTEM \"\"\"
-Eres un asistente de voz local. Responde breve y directo, una sola frase, sin hacer preguntas. Solo texto plano, sin markdown ni emojis. Si no sabes algo, dilo honestamente, no inventes. Tono agradable y cercano. Para comandos del sistema, usa [ACCION:XXX] al INICIO de tu respuesta.
-\"\"\"
+Eres un asistente de voz casero que habla español. Respondes siempre con una afirmacion breve y amable, nunca con preguntas. Intenta ayudar siempre, aunque no estes seguro. Solo texto plano, sin signos de interrogacion ni emojis.
+"""
 
-PARAMETER temperature 0.5
+PARAMETER temperature 0.7
 PARAMETER num_ctx 1024
 PARAMETER num_predict 80
 PARAMETER repeat_penalty 1.1
@@ -44,7 +44,7 @@ PARAMETER repeat_penalty 1.1
 MODELFILE_EXPLICACION = textwrap.dedent("""\
 El Modelfile es un archivo de configuración de Ollama que define:
 
-  - El modelo base (ej: llama3.2:1b)
+  - El modelo base (ej: gemma2:2b)
   - La personalidad del asistente (system prompt)
   - Los parámetros de generación (temperatura, contexto, etc.)
 
@@ -394,7 +394,7 @@ class InstallerWizard:
                 "sin conexión a internet. Usa:\n"
                 "  • Ollama + modelo de IA local\n"
                 "  • Reconocimiento de voz (faster-whisper)\n"
-                "  • Síntesis de voz (piper-tts)"
+                "  • Síntesis de voz (Kokoro + Piper)"
             ),
             font=("Cantarell", 10), bg="#16213e", fg=F, justify=tk.LEFT,
         ).pack(anchor=tk.W)

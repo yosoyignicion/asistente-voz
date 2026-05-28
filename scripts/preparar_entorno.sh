@@ -24,7 +24,7 @@ echo -e "${GREEN}✓${NC} Ollama instalado"
 echo "→ Verificando servidor Ollama..."
 if ! ollama list &>/dev/null; then
     echo "  Iniciando ollama serve en segundo plano..."
-    ollama serve &>/dev/null &
+    OLLAMA_VULKAN=1 ollama serve &>/dev/null &
     for i in $(seq 1 20); do
         if ollama list &>/dev/null; then
             echo -e "  ${GREEN}✓${NC} Servidor Ollama listo (esperé ${i}s)"
@@ -45,7 +45,7 @@ echo "Modelos disponibles en Ollama:"
 ollama list 2>/dev/null || echo "  (ninguno)"
 
 echo ""
-DEFAULT_MODEL="llama3.2:1b"
+DEFAULT_MODEL="gemma2:2b"
 read -r -p "¿Instalar $DEFAULT_MODEL como modelo base? [S/n]: " respuesta
 if [[ -z "$respuesta" || "$respuesta" =~ ^[Ss]$ ]]; then
     BASE_MODEL="$DEFAULT_MODEL"

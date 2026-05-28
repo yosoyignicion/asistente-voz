@@ -163,20 +163,24 @@ class SintetizadorVoz:
         threading.Thread(target=self.reproducir, args=(texto,),
                          daemon=True).start()
 
-    def reproducir_streaming(self, cola_frases: queue.Queue) -> None:
+    def reproducir_streaming(self, cola_frases: queue.Queue,
+                             primer_audio: np.ndarray | None = None) -> None:
         """Reproduce frases de una cola en tiempo real via OutputStream.
 
         La cola recibe str (frase a sintetizar) o None (fin de stream).
-        Usa OutputStream.write() para playback sin gaps entre frases.
+        primer_audio permite pre-sintetizar la primera frase para evitar
+        que el stream arranque vacio (evita buffer underruns).
         """
         import sounddevice as sd
         self._ensure_voice()
         stream = sd.OutputStream(
             samplerate=self._sample_rate, channels=1, dtype="float32",
-            blocksize=0, latency="low",
+            blocksize=1024, latency="high",
         )
         stream.start()
         try:
+            if primer_audio is not None and primer_audio.size > 0:
+                stream.write(primer_audio)
             while True:
                 texto = cola_frases.get()
                 if texto is None:

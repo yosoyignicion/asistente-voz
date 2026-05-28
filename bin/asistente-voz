@@ -29,8 +29,8 @@ if command -v ollama &>/dev/null; then
 fi
 
 if ! "$OLLAMA_BIN" list &>/dev/null 2>&1; then
-    echo "$(date): Iniciando ollama serve" >> "$LOG_FILE"
-    "$OLLAMA_BIN" serve &>/dev/null &
+    echo "$(date): Iniciando ollama serve con GPU Vulkan" >> "$LOG_FILE"
+    OLLAMA_VULKAN=1 "$OLLAMA_BIN" serve &>/dev/null &
     for i in $(seq 1 20); do
         if "$OLLAMA_BIN" list &>/dev/null 2>&1; then
             echo "$(date): Ollama listo (${i}s)" >> "$LOG_FILE"
